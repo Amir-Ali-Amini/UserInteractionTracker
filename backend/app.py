@@ -17,23 +17,33 @@ MONGO_URI = "mongodb://localhost:27017/"
 client = MongoClient(MONGO_URI)  
 db = client['amazon_data_collector']  
 interaction_collection = db['interactions'] 
+user_collection = db['users'] 
 
 # db_schema
-# [
-#     {
-#         _id:user_id,
-#         user_name:user_name,
-#         interactions:[
-#             {**interaction},
-#             .
-#             .
-#             .
-#         ]
-#     },
-#     .
-#     .
-#     .
-# ]
+#       interactions:
+#             [
+#                 {
+#                     interactions:[
+#                         {**interaction, user_id:ObjectID},
+#                         .
+#                         .
+#                         .
+#                     ]
+#                 },
+#                 .
+#                 .
+#                 .
+#             ]
+#       users:
+#             [
+#                 {
+#                     _id:ObjectID,
+#                     user_name:string,
+#                 },
+#                 .
+#                 .
+#                 .
+#             ]
 
 app = Flask(__name__)
 CORS(app)
@@ -46,7 +56,7 @@ localhost:5000
 
 @app.route('/upload', methods=['POST'])
 def upload_file():
-    
+
     if 'file' not in request.files:
         app.logger.info('No file part in the request')
         return {'error': 'No file part'}, 400
@@ -65,7 +75,7 @@ def upload_file():
         app.logger.error(f'user_id is not available')
         return {'error': f'user_id is not available'}, 400 
 
-    user= interaction_collection.find_one({"_id": ObjectId(user_id)})
+    user= user_collection.find_one({"_id": ObjectId(user_id)})
 
     if not user:
         app.logger.error(f'User not found. user_id:{user_id}')
@@ -105,16 +115,12 @@ def upload_file():
             interactions_file = json.load(file)
 
         if interactions_file:
-            interaction_collection.update_one(
-                { "_id": ObjectId(user_id) }, 
-                {
-                    "$push": {
-                        "interactions": {
-                            "$each": interactions_file["interactions"]
-                        }
-                    }
-                }
-            )
+            updated_interactions = [
+            {**interaction, "user_id": ObjectId(user_id)} 
+            for interaction in interactions_file["interactions"]
+            ]
+            
+            interaction_collection.insert_many(updated_interactions)
             app.logger.info(f'Interactions added successfully')
 
         return {'message': f'File {file.filename} uploaded successfully'}, 200
