@@ -3,83 +3,26 @@ from flask_cors import CORS
 import os
 import zipfile
 from io import BytesIO
-import re
 from datetime import datetime, timedelta, timezone
 from bson import ObjectId
 import json
-from pymongo import MongoClient
-import boto3
 from botocore.exceptions import NoCredentialsError
 
 import config
-
-client = MongoClient(config.MONGO_URI)
-db = client[config.DATABASE_NAME]
-interaction_collection = db[config.INTERACTION_COLLECTION_NAME]
-user_collection = db[config.USER_COLLECTION_NAME]
-UPLOAD_FOLDER = config.UPLOAD_FOLDER
-
-AWS_ACCESS_KEY = config.AWS_ACCESS_KEY
-AWS_SECRET_KEY = config.AWS_SECRET_KEY
-BUCKET_NAME = config.BUCKET_NAME
-
-s3_client = boto3.client('s3',
-        aws_access_key_id=AWS_ACCESS_KEY,
-        aws_secret_access_key=AWS_SECRET_KEY)
-
-
-# db_schema
-#       interactions:
-#             [
-#                 {
-#                     interactions:[
-#                         {**interaction, user_id:ObjectID},
-#                         .
-#                         .
-#                         .
-#                     ]
-#                 },
-#                 .
-#                 .
-#                 .
-#             ]
-#       users:
-#             [
-#                 {
-#                     _id:ObjectID,
-#                     user_name:string,
-#                 },
-#                 .
-#                 .
-#                 .
-#             ]
+from db import user_collection, interaction_collection, s3_client
+from authentication import check_user
+from utils import get_interactions_by_date
 
 app = Flask(__name__)
 CORS(app)
 
-REMOVE_ZIP_FILE= True
+UPLOAD_FOLDER= config.UPLOAD_FOLDER
+
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
 localhost:5000
 
-def check_user(user_id, user_collection):
-    if not user_id:
-        app.logger.error(f'user_id is not available')
-        return {'error': f'user_id is not available'}, 400
 
-    try:
-        user_id = ObjectId(user_id)
-    except:
-        app.logger.error(f'User ID is not a valid ObjectId: {user_id}')
-        return {f'error': f'User ID is not a valid id:{user_id}'}, 400
-
-    user= user_collection.find_one({"_id": user_id})
-
-    if not user:
-        app.logger.error(f'User not found. user_id: {user_id}')
-        return {f'error': f'User not found. user_id: {user_id}'}, 403
-
-    return user_id, 200
 
 
 
@@ -185,7 +128,7 @@ def generate_presigned_post():
     try:
         # Generate a presigned POST URL
         response = s3_client.generate_presigned_post(
-                    Bucket=BUCKET_NAME,
+                    Bucket=config.BUCKET_NAME,
                     Key=f'{prefix}/${{filename}}',
                     ExpiresIn=expiration,
                     Conditions=[
@@ -199,45 +142,6 @@ def generate_presigned_post():
 
     except NoCredentialsError:
         return jsonify({'error': 'Credentials not available'}), 403
-
-
-def get_interactions_by_date(user_id, date=None, return_data=None ):
-    # If no date is specified, use today's date
-    if date is None:
-        date = datetime.now()
-
-    # Create date range for the specified date
-
-    start_of_day = date.strftime("%Y-%m-%dT00:00:00.000Z")
-    end_of_day = (date + timedelta(days=1)).strftime("%Y-%m-%dT00:00:00.000Z")
-
-    if return_data:
-        interactions = interaction_collection.find({
-            "user_id": ObjectId(user_id),
-            "timestamp": {
-                "$gte": start_of_day,
-                "$lt": end_of_day
-            }
-        })
-        interactions = list(interactions)
-        for interaction in interactions:
-            interaction["_id"] = str(interaction["_id"])
-            if "user_id" in interaction:
-                interaction["user_id"] = str(interaction["user_id"])
-        return list(interactions)
-    else:
-        n_documents= interaction_collection.count_documents({
-            "user_id": ObjectId(user_id),
-            "timestamp": {
-                "$gte": start_of_day,
-                "$lt": end_of_day
-            }
-        })
-        return{
-            "start_of_day":start_of_day,
-            "end_of_day":end_of_day,
-            "number_of_documents" : n_documents
-        }
 
 @app.route('/get_interactions', methods=['GET'])
 def get_interactions():
@@ -262,23 +166,6 @@ def get_interactions():
     interactions = get_interactions_by_date(user_id, date, return_data)
 
     return jsonify(interactions)
-
-
-@app.route('/get_all_users', methods=['GET'])
-def get_all_users():
-    user_id = request.args.get('user_id')
-    date_str = request.args.get('date')  # in 'YYYY-MM-DD' format
-
-    result, status = check_user(user_id, user_collection=user_collection)
-
-    # if status!=200:
-    #     return result, status
-    # else: user_id = result
-
-    all_users = user_collection.find({})
-    all_users = [{**item, "_id":str(item["_id"])} for item in all_users]
-
-    return list(all_users),200
 
 
 if __name__ == '__main__':
